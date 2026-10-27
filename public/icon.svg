@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <rect width="512" height="512" rx="128" fill="#1e1b4b"/>
+  <circle cx="256" cy="256" r="210" fill="url(#grad1)" opacity="0.15"/>
+  <defs>
+    <linearGradient id="grad1" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6366f1"/>
+      <stop offset="1" stop-color="#a855f7"/>
+    </linearGradient>
+    <linearGradient id="grad2" x1="160" y1="120" x2="352" y2="360" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#818cf8"/>
+      <stop offset="1" stop-color="#c084fc"/>
+    </linearGradient>
+  </defs>
+  <!-- Soundwaves -->
+  <path d="M120 200v112" stroke="#6366f1" stroke-width="24" stroke-linecap="round"/>
+  <path d="M164 160v192" stroke="#818cf8" stroke-width="24" stroke-linecap="round"/>
+  <path d="M348 160v192" stroke="#818cf8" stroke-width="24" stroke-linecap="round"/>
+  <path d="M392 200v112" stroke="#6366f1" stroke-width="24" stroke-linecap="round"/>
+  <!-- Microphone Capsule -->
+  <rect x="208" y="128" width="96" height="176" rx="48" fill="url(#grad2)"/>
+  <path d="M176 240c0 44.18 35.82 80 80 80s80-35.82 80-80" stroke="#ffffff" stroke-width="24" stroke-linecap="round"/>
+  <line x1="256" y1="320" x2="256" y2="384" stroke="#ffffff" stroke-width="24" stroke-linecap="round"/>
+  <line x1="208" y1="384" x2="304" y2="384" stroke="#ffffff" stroke-width="24" stroke-linecap="round"/>
+</svg>

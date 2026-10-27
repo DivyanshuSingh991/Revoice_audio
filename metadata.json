@@ -1,0 +1,6 @@
+{
+  "name": "ResonaVoice - Android Speech Corpus Recorder",
+  "description": "Functional Android voice recording application for collecting sentence-level speech corpus datasets with participant authentication, informed consent, 3 difficulty levels, real-time waveform recording, local WAV/PCM audio storage, playback review, and dataset export.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

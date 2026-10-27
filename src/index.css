@@ -1,0 +1,53 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior-y: contain;
+    background-color: #F8FAF9;
+    color: #1E293B;
+  }
+
+  /* Custom audio waveform canvas smoothing */
+  canvas {
+    image-rendering: pixelated;
+  }
+}
+
+/* Custom scrollbars with healthcare teal tint */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(241, 245, 249, 0.8);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(13, 148, 136, 0.25);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(13, 148, 136, 0.45);
+}
+
+/* ReVoice Audio subtle ambient shadows */
+.revoice-card,
+.healthcast-card {
+  box-shadow: 0 4px 20px -2px rgba(15, 118, 110, 0.05), 0 2px 6px -1px rgba(0, 0, 0, 0.03);
+}
+
+.revoice-card-hover,
+.healthcast-card-hover {
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.revoice-card-hover:hover,
+.healthcast-card-hover:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 25px -4px rgba(15, 118, 110, 0.08), 0 4px 10px -2px rgba(0, 0, 0, 0.04);
+}
