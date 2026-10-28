@@ -1,9 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   Mic,
   Lock,
   Mail,
-  Phone,
   Smartphone,
   User as UserIcon,
   Calendar,
@@ -17,11 +16,8 @@ import {
   Eye,
   EyeOff,
   ShieldAlert,
-  CheckCircle2,
-  MessageSquare,
-  RotateCcw,
 } from 'lucide-react';
-import { authService, RegisterParams, CURRENT_CONSENT_VERSION, OtpSession } from '../../services/authService';
+import { authService, RegisterParams, CURRENT_CONSENT_VERSION } from '../../services/authService';
 import { User, Gender, Cohort, UserRole } from '../../types';
 
 interface WelcomeLoginScreenProps {
@@ -49,6 +45,7 @@ export const WelcomeLoginScreen: React.FC<WelcomeLoginScreenProps> = ({
 
   // Register form state
   const [regName, setRegName] = useState('');
+  const [regEmail, setRegEmail] = useState('');
   const [regMobile, setRegMobile] = useState('');
   const [regCohort, setRegCohort] = useState<Cohort>('healthy');
   const [regGender, setRegGender] = useState<Gender>('prefer_not_to_say');
@@ -57,29 +54,11 @@ export const WelcomeLoginScreen: React.FC<WelcomeLoginScreenProps> = ({
   const [consentAgreed, setConsentAgreed] = useState(false);
   const [showConsentDetails, setShowConsentDetails] = useState(false);
 
-  // OTP Verification state for Sign Up
-  const [otpStep, setOtpStep] = useState<'form' | 'otp_verification'>('form');
-  const [activeOtpSession, setActiveOtpSession] = useState<OtpSession | null>(null);
-  const [enteredOtp, setEnteredOtp] = useState('');
-  const [otpCountdown, setOtpCountdown] = useState<number>(60);
-  const [resendingOtp, setResendingOtp] = useState(false);
-
   // Forgot password form state
-  const [recoveryMobile, setRecoveryMobile] = useState('');
+  const [recoveryEmail, setRecoveryEmail] = useState('');
   const [recoveryNewPassword, setRecoveryNewPassword] = useState('');
 
-  // OTP Countdown timer effect
-  useEffect(() => {
-    let timer: NodeJS.Timeout;
-    if (otpStep === 'otp_verification' && otpCountdown > 0) {
-      timer = setTimeout(() => {
-        setOtpCountdown((prev) => prev - 1);
-      }, 1000);
-    }
-    return () => clearTimeout(timer);
-  }, [otpStep, otpCountdown]);
-
-  // Handle Login Submission
+  // Handle Login Submission (Email & Password)
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
@@ -87,11 +66,7 @@ export const WelcomeLoginScreen: React.FC<WelcomeLoginScreenProps> = ({
 
     const cleanInput = loginIdentifier.trim();
     if (!cleanInput || !loginPassword) {
-      setErrorMessage(
-        roleMode === 'admin'
-          ? 'Please enter your staff email or mobile number and password.'
-          : 'Please enter your 10-digit mobile number and password.'
-      );
+      setErrorMessage('Please enter your email and password.');
       return;
     }
 
@@ -107,21 +82,27 @@ export const WelcomeLoginScreen: React.FC<WelcomeLoginScreenProps> = ({
       if (err instanceof Error) {
         setErrorMessage(err.message);
       } else {
-        setErrorMessage('Invalid credentials. Please verify your mobile number and password.');
+        setErrorMessage('Invalid credentials. Please verify your email and password.');
       }
     } finally {
       setLoading(false);
     }
   };
 
-  // Step 1: Validate Registration Details and Send OTP
-  const handleInitiateRegisterOtp = async (e: React.FormEvent) => {
+  // Direct Registration (Both Email & Mobile required, No OTP)
+  const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
     setInfoMessage(null);
 
     if (!regName.trim()) {
       setErrorMessage('Please enter your full name.');
+      return;
+    }
+
+    const cleanEmail = regEmail.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      setErrorMessage('Please enter a valid email address.');
       return;
     }
 
@@ -149,72 +130,10 @@ export const WelcomeLoginScreen: React.FC<WelcomeLoginScreenProps> = ({
 
     setLoading(true);
     try {
-      const session = await authService.sendOtp(cleanDigits);
-      setActiveOtpSession(session);
-      setOtpStep('otp_verification');
-      setEnteredOtp('');
-      setOtpCountdown(60);
-      setInfoMessage(`Verification code sent to ${session.formattedPhone}`);
-    } catch (err: unknown) {
-      if (err instanceof Error) {
-        setErrorMessage(err.message);
-      } else {
-        setErrorMessage('Failed to send OTP. Please check your mobile number.');
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Step 2: Resend OTP
-  const handleResendOtp = async () => {
-    if (otpCountdown > 0 || !activeOtpSession) return;
-    setErrorMessage(null);
-    setResendingOtp(true);
-    try {
-      const session = await authService.sendOtp(activeOtpSession.mobileNumber);
-      setActiveOtpSession(session);
-      setOtpCountdown(60);
-      setEnteredOtp('');
-      setInfoMessage(`New verification code sent to ${session.formattedPhone}`);
-    } catch (err: unknown) {
-      if (err instanceof Error) {
-        setErrorMessage(err.message);
-      } else {
-        setErrorMessage('Failed to resend OTP.');
-      }
-    } finally {
-      setResendingOtp(false);
-    }
-  };
-
-  // Step 3: Verify OTP and Complete Account Registration
-  const handleVerifyOtpAndRegister = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMessage(null);
-
-    if (!activeOtpSession) {
-      setErrorMessage('Verification session expired. Please start registration again.');
-      setOtpStep('form');
-      return;
-    }
-
-    const cleanOtp = enteredOtp.trim();
-    if (cleanOtp.length !== 6) {
-      setErrorMessage('Please enter the 6-digit OTP verification code.');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      // 1. Verify OTP
-      authService.verifyOtp(activeOtpSession.mobileNumber, cleanOtp);
-
-      // 2. Register User Account
-      const ageNum = regAge ? parseInt(regAge, 10) : undefined;
       const params: RegisterParams = {
         name: regName.trim(),
-        mobileNumber: activeOtpSession.mobileNumber,
+        email: cleanEmail,
+        mobileNumber: cleanDigits,
         cohort: regCohort,
         role: 'participant',
         gender: regGender,
@@ -229,22 +148,22 @@ export const WelcomeLoginScreen: React.FC<WelcomeLoginScreenProps> = ({
       if (err instanceof Error) {
         setErrorMessage(err.message);
       } else {
-        setErrorMessage('OTP verification failed. Please try again.');
+        setErrorMessage('Registration failed. Please check your details and try again.');
       }
     } finally {
       setLoading(false);
     }
   };
 
-  // Password Recovery handler (via Mobile Number)
+  // Password Recovery handler (via Email)
   const handlePasswordRecovery = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
     setInfoMessage(null);
 
-    const cleanDigits = recoveryMobile.replace(/\D/g, '').slice(-10);
-    if (cleanDigits.length !== 10) {
-      setErrorMessage('Please enter your registered 10-digit mobile number.');
+    const cleanEmail = recoveryEmail.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      setErrorMessage('Please enter your registered email address.');
       return;
     }
 
@@ -255,15 +174,15 @@ export const WelcomeLoginScreen: React.FC<WelcomeLoginScreenProps> = ({
 
     setLoading(true);
     try {
-      await authService.resetPasswordWithMobile(cleanDigits, recoveryNewPassword);
+      await authService.resetPassword(cleanEmail, recoveryNewPassword);
       setInfoMessage('Password has been successfully updated. You can now sign in.');
       setAuthMode('login');
-      setLoginIdentifier(cleanDigits);
+      setLoginIdentifier(cleanEmail);
     } catch (err: unknown) {
       if (err instanceof Error) {
         setErrorMessage(err.message);
       } else {
-        setErrorMessage('Failed to reset password. Please check your mobile number.');
+        setErrorMessage('Failed to reset password. Please check your email address.');
       }
     } finally {
       setLoading(false);
@@ -291,7 +210,6 @@ export const WelcomeLoginScreen: React.FC<WelcomeLoginScreenProps> = ({
           type="button"
           onClick={() => {
             setRoleMode('participant');
-            setOtpStep('form');
             setErrorMessage(null);
             setInfoMessage(null);
           }}
@@ -309,7 +227,6 @@ export const WelcomeLoginScreen: React.FC<WelcomeLoginScreenProps> = ({
           onClick={() => {
             setRoleMode('admin');
             setAuthMode('login');
-            setOtpStep('form');
             setErrorMessage(null);
             setInfoMessage(null);
           }}
@@ -324,7 +241,7 @@ export const WelcomeLoginScreen: React.FC<WelcomeLoginScreenProps> = ({
       </div>
 
       {/* Secondary Auth Switcher (Only for Participant: Login vs Register) */}
-      {roleMode === 'participant' && otpStep === 'form' && (
+      {roleMode === 'participant' && (
         <div className="flex rounded-2xl bg-slate-100 p-1 border border-slate-200/80 mb-5">
           <button
             type="button"
@@ -339,7 +256,7 @@ export const WelcomeLoginScreen: React.FC<WelcomeLoginScreenProps> = ({
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            Sign In with Mobile
+            Sign In
           </button>
           <button
             type="button"
@@ -354,7 +271,7 @@ export const WelcomeLoginScreen: React.FC<WelcomeLoginScreenProps> = ({
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            Create Account (OTP)
+            Create Account
           </button>
         </div>
       )}
@@ -388,42 +305,32 @@ export const WelcomeLoginScreen: React.FC<WelcomeLoginScreenProps> = ({
       )}
 
       {/* ========================================================================= */}
-      {/* 1. SIGN IN VIEW (Mobile Number & Password)                                */}
+      {/* 1. SIGN IN VIEW (Email & Password)                                        */}
       {/* ========================================================================= */}
       {(authMode === 'login' || roleMode === 'admin') && (
         <form onSubmit={handleLoginSubmit} className="space-y-4 rounded-3xl bg-white p-6 border border-slate-200/80 shadow-xl">
           <div>
             <label className="block text-xs font-bold text-slate-700 mb-1.5">
-              {roleMode === 'admin' ? 'Staff Email or Mobile Number' : 'Mobile Number'}
+              Email Address
             </label>
             <div className="relative flex items-center">
-              {roleMode === 'participant' && (
-                <div className="absolute left-3 flex items-center gap-1 text-xs font-bold text-slate-600 pr-2 border-r border-slate-200 z-10 pointer-events-none">
-                  <span>🇮🇳</span>
-                  <span>+91</span>
-                </div>
-              )}
               <input
-                type={roleMode === 'admin' ? 'text' : 'tel'}
+                type="email"
                 required
-                autoComplete={roleMode === 'admin' ? 'username' : 'tel'}
+                autoComplete="email"
                 value={loginIdentifier}
                 onChange={(e) => setLoginIdentifier(e.target.value)}
-                placeholder={roleMode === 'admin' ? 'Enter staff email or mobile' : '10-digit mobile number'}
-                maxLength={roleMode === 'admin' ? 60 : 14}
-                className={`w-full rounded-xl bg-slate-50 border border-slate-200 py-2.5 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-teal-500 focus:bg-white transition ${
-                  roleMode === 'participant' ? 'pl-20 pr-10' : 'px-3.5 pr-10'
-                }`}
+                placeholder={roleMode === 'admin' ? 'Enter staff email' : 'name@example.com'}
+                maxLength={80}
+                className="w-full rounded-xl bg-slate-50 border border-slate-200 px-3.5 py-2.5 pr-10 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-teal-500 focus:bg-white transition"
               />
               <div className="absolute right-3.5 pointer-events-none text-slate-400">
-                {roleMode === 'admin' ? <Mail className="w-4 h-4" /> : <Smartphone className="w-4 h-4" />}
+                <Mail className="w-4 h-4" />
               </div>
             </div>
-            {roleMode === 'participant' && (
-              <p className="text-[11px] text-slate-400 mt-1">
-                Enter your registered 10-digit mobile number to log in
-              </p>
-            )}
+            <p className="text-[11px] text-slate-400 mt-1">
+              Enter your registered email address to sign in
+            </p>
           </div>
 
           <div>
@@ -476,7 +383,7 @@ export const WelcomeLoginScreen: React.FC<WelcomeLoginScreenProps> = ({
               </span>
             ) : (
               <>
-                <span>{roleMode === 'admin' ? 'Authenticate Staff Access' : 'Sign In with Mobile'}</span>
+                <span>{roleMode === 'admin' ? 'Authenticate Staff Access' : 'Sign In with Email'}</span>
                 <ArrowRight className="w-4 h-4" />
               </>
             )}
@@ -485,10 +392,10 @@ export const WelcomeLoginScreen: React.FC<WelcomeLoginScreenProps> = ({
       )}
 
       {/* ========================================================================= */}
-      {/* 2. SIGN UP: STEP 1 - FILL DETAILS & REQUEST OTP                           */}
+      {/* 2. SIGN UP: FILL DETAILS (EMAIL & PHONE NUMBER) - DIRECT REGISTRATION     */}
       {/* ========================================================================= */}
-      {roleMode === 'participant' && authMode === 'register' && otpStep === 'form' && (
-        <form onSubmit={handleInitiateRegisterOtp} className="space-y-3.5 rounded-3xl bg-white p-6 border border-slate-200/80 shadow-xl">
+      {roleMode === 'participant' && authMode === 'register' && (
+        <form onSubmit={handleRegisterSubmit} className="space-y-3.5 rounded-3xl bg-white p-6 border border-slate-200/80 shadow-xl">
           <div>
             <label className="block text-xs font-bold text-slate-700 mb-1">
               Full Name
@@ -507,9 +414,29 @@ export const WelcomeLoginScreen: React.FC<WelcomeLoginScreenProps> = ({
             </div>
           </div>
 
+          {/* Email Address Input */}
           <div>
             <label className="block text-xs font-bold text-slate-700 mb-1">
-              Mobile Number (OTP Verification)
+              Email Address
+            </label>
+            <div className="relative">
+              <input
+                type="email"
+                required
+                autoComplete="email"
+                value={regEmail}
+                onChange={(e) => setRegEmail(e.target.value)}
+                placeholder="name@example.com"
+                className="w-full rounded-xl bg-slate-50 border border-slate-200 px-3.5 py-2.5 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-teal-500 focus:bg-white transition"
+              />
+              <Mail className="absolute right-3.5 top-3 w-4 h-4 text-slate-400 pointer-events-none" />
+            </div>
+          </div>
+
+          {/* Phone Number Input */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">
+              Phone Number
             </label>
             <div className="relative flex items-center">
               <div className="absolute left-3 flex items-center gap-1 text-xs font-bold text-slate-600 pr-2 border-r border-slate-200 z-10 pointer-events-none">
@@ -528,8 +455,8 @@ export const WelcomeLoginScreen: React.FC<WelcomeLoginScreenProps> = ({
               />
               <Smartphone className="absolute right-3.5 top-3 w-4 h-4 text-slate-400 pointer-events-none" />
             </div>
-            <p className="text-[11px] text-teal-700 font-medium mt-1 flex items-center gap-1">
-              <span>A 6-digit OTP code will be sent to this mobile number</span>
+            <p className="text-[11px] text-slate-400 mt-1">
+              10-digit mobile number for communication & identity
             </p>
           </div>
 
@@ -717,12 +644,11 @@ export const WelcomeLoginScreen: React.FC<WelcomeLoginScreenProps> = ({
               {loading ? (
                 <span className="flex items-center gap-2">
                   <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  <span>Sending OTP...</span>
+                  <span>Creating Account...</span>
                 </span>
               ) : (
                 <>
-                  <Smartphone className="w-4 h-4" />
-                  <span>Verify Mobile & Get OTP</span>
+                  <span>Create Account</span>
                   <ArrowRight className="w-4 h-4" />
                 </>
               )}
@@ -732,152 +658,29 @@ export const WelcomeLoginScreen: React.FC<WelcomeLoginScreenProps> = ({
       )}
 
       {/* ========================================================================= */}
-      {/* 2b. SIGN UP: STEP 2 - ENTER OTP & COMPLETE REGISTRATION                  */}
-      {/* ========================================================================= */}
-      {roleMode === 'participant' && authMode === 'register' && otpStep === 'otp_verification' && (
-        <form onSubmit={handleVerifyOtpAndRegister} className="space-y-4 rounded-3xl bg-white p-6 border border-slate-200/80 shadow-xl animate-fadeIn">
-          <div className="text-center space-y-1 pb-1 border-b border-slate-100">
-            <div className="w-12 h-12 rounded-2xl bg-teal-50 border border-teal-200 text-teal-600 flex items-center justify-center mx-auto mb-2 shadow-xs">
-              <Phone className="w-6 h-6 animate-pulse" />
-            </div>
-            <h2 className="text-base font-bold text-slate-900">Verify Mobile Number</h2>
-            <p className="text-xs text-slate-500">
-              Enter the 6-digit code sent to <strong className="text-slate-800 font-mono">{activeOtpSession?.formattedPhone || regMobile}</strong>
-            </p>
-          </div>
-
-          {/* Simulated SMS Alert Banner with 1-click Auto-Fill */}
-          {activeOtpSession && (
-            <div className="p-3.5 rounded-2xl bg-slate-900 text-white border border-slate-700 shadow-lg space-y-2.5 animate-fadeIn">
-              <div className="flex items-center justify-between text-xs">
-                <div className="flex items-center gap-1.5 font-bold text-teal-400">
-                  <MessageSquare className="w-4 h-4" />
-                  <span>Incoming SMS Message</span>
-                </div>
-                <span className="text-[10px] text-slate-400 font-mono">Just now</span>
-              </div>
-              <div className="p-2.5 rounded-xl bg-white/10 text-xs text-slate-100 flex items-center justify-between">
-                <div>
-                  <span className="text-slate-300">Your ReVoice OTP:</span>
-                  <span className="font-mono text-base font-extrabold tracking-widest text-teal-300 ml-2">
-                    {activeOtpSession.otp}
-                  </span>
-                </div>
-                <span className="text-[10px] text-teal-200 font-semibold bg-teal-950 px-2 py-0.5 rounded border border-teal-800">
-                  Valid 5m
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setEnteredOtp(activeOtpSession.otp)}
-                className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-400 hover:from-teal-400 hover:to-emerald-300 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 transition active:scale-95 shadow-sm"
-              >
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                <span>Click to Auto-fill OTP ({activeOtpSession.otp})</span>
-              </button>
-            </div>
-          )}
-
-          {/* 6-Digit OTP Input */}
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1.5 text-center">
-              6-Digit Verification Code
-            </label>
-            <input
-              type="text"
-              required
-              autoFocus
-              inputMode="numeric"
-              pattern="[0-9]*"
-              maxLength={6}
-              value={enteredOtp}
-              onChange={(e) => setEnteredOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
-              placeholder="••••••"
-              className="w-full text-center font-mono font-extrabold text-2xl tracking-[0.4em] py-3 rounded-2xl bg-slate-50 border-2 border-teal-500 text-teal-950 focus:outline-none focus:bg-white focus:ring-4 focus:ring-teal-500/20 transition shadow-inner"
-            />
-          </div>
-
-          <div className="flex items-center justify-between text-xs px-1">
-            <span className="text-slate-500">Didn't receive the SMS?</span>
-            {otpCountdown > 0 ? (
-              <span className="text-slate-400 font-mono font-medium">
-                Resend in {otpCountdown}s
-              </span>
-            ) : (
-              <button
-                type="button"
-                onClick={handleResendOtp}
-                disabled={resendingOtp}
-                className="text-teal-700 hover:text-teal-800 font-bold flex items-center gap-1"
-              >
-                <RotateCcw className={`w-3.5 h-3.5 ${resendingOtp ? 'animate-spin' : ''}`} />
-                <span>Resend OTP</span>
-              </button>
-            )}
-          </div>
-
-          <div className="pt-2 space-y-2">
-            <button
-              type="submit"
-              disabled={loading || enteredOtp.trim().length !== 6}
-              className="w-full min-h-[46px] rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-sm flex items-center justify-center gap-2 shadow-md shadow-teal-600/20 active:scale-[0.98] transition disabled:opacity-50"
-            >
-              {loading ? (
-                <span className="flex items-center gap-2">
-                  <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  <span>Verifying & Creating Account...</span>
-                </span>
-              ) : (
-                <>
-                  <CheckCircle2 className="w-4 h-4" />
-                  <span>Verify OTP & Complete Registration</span>
-                </>
-              )}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                setOtpStep('form');
-                setErrorMessage(null);
-                setInfoMessage(null);
-              }}
-              className="w-full py-2 text-xs font-semibold text-slate-500 hover:text-slate-800 transition"
-            >
-              ← Edit Mobile Number ({regMobile})
-            </button>
-          </div>
-        </form>
-      )}
-
-      {/* ========================================================================= */}
-      {/* 3. PASSWORD RECOVERY VIEW (VIA MOBILE NUMBER)                            */}
+      {/* 3. PASSWORD RECOVERY VIEW (VIA EMAIL)                                     */}
       {/* ========================================================================= */}
       {authMode === 'forgot_password' && (
         <form onSubmit={handlePasswordRecovery} className="space-y-4 rounded-3xl bg-white p-6 border border-slate-200/80 shadow-xl">
           <div className="text-left">
             <h2 className="text-sm font-bold text-slate-900">Reset Password</h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              Enter your registered mobile number and choose a new password.
+              Enter your registered email address and choose a new password.
             </p>
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">Registered Mobile Number</label>
+            <label className="block text-xs font-bold text-slate-700 mb-1">Registered Email Address</label>
             <div className="relative flex items-center">
-              <div className="absolute left-3 flex items-center gap-1 text-xs font-bold text-slate-600 pr-2 border-r border-slate-200 z-10 pointer-events-none">
-                <span>🇮🇳</span>
-                <span>+91</span>
-              </div>
               <input
-                type="tel"
+                type="email"
                 required
-                value={recoveryMobile}
-                onChange={(e) => setRecoveryMobile(e.target.value.replace(/\D/g, '').slice(0, 10))}
-                placeholder="10-digit mobile number"
-                maxLength={10}
-                className="w-full rounded-xl bg-slate-50 border border-slate-200 py-2.5 pl-20 pr-3.5 text-sm font-mono text-slate-900 placeholder-slate-400 focus:outline-none focus:border-teal-500 focus:bg-white"
+                value={recoveryEmail}
+                onChange={(e) => setRecoveryEmail(e.target.value)}
+                placeholder="name@example.com"
+                className="w-full rounded-xl bg-slate-50 border border-slate-200 px-3.5 py-2.5 pr-10 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-teal-500 focus:bg-white"
               />
+              <Mail className="absolute right-3.5 top-3 w-4 h-4 text-slate-400 pointer-events-none" />
             </div>
           </div>
 

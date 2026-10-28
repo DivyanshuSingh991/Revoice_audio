@@ -104,8 +104,8 @@ export async function generateUniqueParticipantId(): Promise<string> {
 
 export interface RegisterParams {
   name: string;
+  email: string;
   mobileNumber: string;
-  email?: string;
   gender: Gender;
   age?: number;
   cohort?: Cohort;
@@ -114,70 +114,9 @@ export interface RegisterParams {
   consentAgreed?: boolean;
 }
 
-export interface OtpSession {
-  mobileNumber: string;
-  otp: string;
-  expiresAt: number;
-  formattedPhone: string;
-}
-
 class AuthService {
   private currentUser: User | null = null;
   private currentConsent: ConsentRecord | null = null;
-  private activeOtps = new Map<string, OtpSession>();
-
-  /**
-   * Request / Generate 6-digit OTP for registration or verification
-   */
-  async sendOtp(mobileNumber: string): Promise<OtpSession> {
-    const cleanDigits = mobileNumber.replace(/\D/g, '').slice(-10);
-    if (cleanDigits.length !== 10) {
-      throw new Error('Please enter a valid 10-digit mobile number.');
-    }
-
-    // Check if account already exists with this mobile number
-    const existing = await dbService.getUserByMobileNumber(cleanDigits);
-    if (existing) {
-      throw new Error('An account with this mobile number is already registered. Please sign in instead.');
-    }
-
-    // Generate random 6-digit OTP
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const session: OtpSession = {
-      mobileNumber: cleanDigits,
-      otp: code,
-      expiresAt: Date.now() + 5 * 60 * 1000, // 5 minutes validity
-      formattedPhone: `+91 ${cleanDigits.slice(0, 5)} ${cleanDigits.slice(5)}`,
-    };
-
-    this.activeOtps.set(cleanDigits, session);
-    return session;
-  }
-
-  /**
-   * Verify entered OTP code
-   */
-  verifyOtp(mobileNumber: string, enteredOtp: string): boolean {
-    const cleanDigits = mobileNumber.replace(/\D/g, '').slice(-10);
-    const session = this.activeOtps.get(cleanDigits);
-
-    if (!session) {
-      throw new Error('No active OTP found. Please request a new OTP.');
-    }
-
-    if (Date.now() > session.expiresAt) {
-      this.activeOtps.delete(cleanDigits);
-      throw new Error('OTP has expired. Please click Resend OTP.');
-    }
-
-    if (session.otp !== enteredOtp.trim()) {
-      throw new Error('Incorrect OTP code. Please enter the valid 6-digit verification code.');
-    }
-
-    // Verified successfully
-    this.activeOtps.delete(cleanDigits);
-    return true;
-  }
 
   /**
    * Initializes session from sessionStorage if available
@@ -230,20 +169,21 @@ class AuthService {
       throw new Error('Please enter a valid 10-digit mobile number.');
     }
 
+    const emailToUse = (params.email || '').trim().toLowerCase();
+    if (!emailToUse || !emailToUse.includes('@')) {
+      throw new Error('Please enter a valid email address.');
+    }
+
+    // Check duplicate email
+    const existingEmail = await dbService.getUserByEmail(emailToUse);
+    if (existingEmail) {
+      throw new Error('An account with this email address is already registered. Please sign in instead.');
+    }
+
     // Check duplicate mobile
     const existingMobile = await dbService.getUserByMobileNumber(cleanMobile);
     if (existingMobile) {
-      throw new Error('An account with this mobile number is already registered. Please sign in instead.');
-    }
-
-    const emailToUse = params.email?.trim().toLowerCase() || `${cleanMobile}@revoice.audio`;
-
-    // Check duplicate email if explicitly provided
-    if (params.email) {
-      const existingEmail = await dbService.getUserByEmail(emailToUse);
-      if (existingEmail) {
-        throw new Error('An account with this email address is already registered.');
-      }
+      throw new Error('An account with this mobile number is already registered.');
     }
 
     // Generate unique participant ID or staff ID
@@ -340,7 +280,7 @@ class AuthService {
   }
 
   /**
-   * Login with mobile number, email, or Participant ID, with optional role verification
+   * Login with email (or mobile number / Participant ID) and password
    */
   async login(loginIdentifier: string, password: string, requiredRole?: UserRole): Promise<User> {
     const trimmed = loginIdentifier.trim();
@@ -348,37 +288,34 @@ class AuthService {
     const cleanDigits = trimmed.replace(/\D/g, '').slice(-10);
     let user: User | null = null;
 
-    // 1. If 10-digit mobile number, search by mobile number first
-    if (cleanDigits.length === 10) {
-      user = await dbService.getUserByMobileNumber(cleanDigits);
-      if (!user) {
-        user = await dbService.getUserByEmail(`${cleanDigits}@revoice.audio`);
-      }
+    // 1. Check by Email
+    if (trimmed.includes('@')) {
+      user = await dbService.getUserByEmail(trimmed.toLowerCase());
     }
 
-    // 2. Check by Participant ID / Staff ID (e.g. SPK_0001, STAFF_0001, RV-000123)
+    // 2. Check by Participant ID / Staff ID (e.g. SPK_0001, STAFF_0001)
     if (!user && (upper.startsWith('SPK_') || upper.startsWith('STAFF_') || upper.startsWith('RV-'))) {
       user = await dbService.getUserByParticipantId(upper);
     }
 
-    // 3. Check by Email
-    if (!user && trimmed.includes('@')) {
-      user = await dbService.getUserByEmail(trimmed.toLowerCase());
+    // 3. Fallback: 10-digit mobile number
+    if (!user && cleanDigits.length === 10) {
+      user = await dbService.getUserByMobileNumber(cleanDigits);
     }
 
     // 4. Fallbacks for any remaining format
     if (!user) {
-      user = await dbService.getUserByParticipantId(upper);
+      user = await dbService.getUserByEmail(trimmed.toLowerCase());
     }
     if (!user) {
-      user = await dbService.getUserByEmail(trimmed.toLowerCase());
+      user = await dbService.getUserByParticipantId(upper);
     }
     if (!user && cleanDigits.length >= 7) {
       user = await dbService.getUserByMobileNumber(cleanDigits);
     }
 
     if (!user) {
-      throw new Error('No registered account found with that mobile number or credentials.');
+      throw new Error('No registered account found with that email or credentials.');
     }
 
     if (user.status === 'withdrawn') {
@@ -393,7 +330,6 @@ class AuthService {
 
     if (isTargetAdmin && password === 'SJDAR@admin') {
       isValid = true;
-      // Ensure email and credentials are fully upgraded to Revoicegenai@gmail.com
       if (user.email !== 'revoicegenai@gmail.com') {
         user.email = 'revoicegenai@gmail.com';
         await dbService.updateUser(user);
@@ -450,7 +386,7 @@ class AuthService {
   }
 
   /**
-   * Reset / Recover Password by verified email
+   * Reset / Recover Password by email
    */
   async resetPassword(email: string, newPass: string): Promise<void> {
     const normalized = email.trim().toLowerCase();
@@ -465,7 +401,7 @@ class AuthService {
   }
 
   /**
-   * Reset / Recover Password by verified mobile number
+   * Reset / Recover Password by registered mobile number
    */
   async resetPasswordWithMobile(mobileNumber: string, newPass: string): Promise<void> {
     const cleanDigits = mobileNumber.replace(/\D/g, '').slice(-10);
