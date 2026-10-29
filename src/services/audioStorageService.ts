@@ -135,16 +135,10 @@ class AudioStorageService implements IAudioStorageService {
   }
 
   /**
-   * Directly exports/saves the audio file from system storage to the user's local machine disk
+   * Directly triggers browser download of any Blob as a file with safe cleanup
    */
-  async downloadAudioFileToLocalDisk(path: string, customFilename?: string): Promise<boolean> {
+  downloadBlobToLocalDisk(blob: Blob, filename: string): boolean {
     try {
-      const blob = await this.getAudioBlob(path);
-      if (!blob) {
-        throw new Error(`Audio file not found at system path: ${path}`);
-      }
-
-      const filename = customFilename || path.split('/').pop() || 'recording.wav';
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
@@ -152,8 +146,30 @@ class AudioStorageService implements IAudioStorageService {
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      URL.revokeObjectURL(url);
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
       return true;
+    } catch (err) {
+      console.error('Failed to download blob to disk:', err);
+      return false;
+    }
+  }
+
+  /**
+   * Directly exports/saves the audio file from system storage to the user's local machine disk
+   */
+  async downloadAudioFileToLocalDisk(
+    path: string,
+    customFilename?: string,
+    recordingId?: string
+  ): Promise<boolean> {
+    try {
+      const blob = await this.getAudioBlob(path, recordingId);
+      if (!blob) {
+        throw new Error(`Audio file not found at system path: ${path}`);
+      }
+
+      const filename = customFilename || path.split('/').pop() || 'recording.wav';
+      return this.downloadBlobToLocalDisk(blob, filename);
     } catch (err) {
       console.error('Failed to download audio file to disk:', err);
       return false;

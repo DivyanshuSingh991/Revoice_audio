@@ -379,7 +379,18 @@ export default function App() {
       currentUser.cohort
     );
 
-    // 2. Advance prompt sequence independently for this difficulty level
+    // 2. Automatically download the audio file directly to user's device (.wav)
+    try {
+      await audioStorageService.downloadAudioFileToLocalDisk(
+        newRec.localFilePath,
+        `${newRec.id}.wav`,
+        newRec.id
+      );
+    } catch (downloadErr) {
+      console.warn('Auto-download audio failed:', downloadErr);
+    }
+
+    // 3. Advance prompt sequence independently for this difficulty level
     const updatedProg = await progressService.advanceLevelSequence(
       currentUser.id,
       reviewData.sentence.level,
@@ -388,12 +399,12 @@ export default function App() {
     );
     setParticipantProgress(updatedProg);
 
-    // 3. Refresh user state
+    // 4. Refresh user state
     await refreshUserData(currentUser.id);
 
     addToast(
       'success',
-      `Prompt take submitted (${(newRec.fileSize / 1024).toFixed(0)} KB WAV). Next sentence in level unlocked.`
+      `Prompt take submitted & audio downloaded (${(newRec.fileSize / 1024).toFixed(0)} KB WAV). Next sentence in level unlocked.`
     );
 
     setTimeout(() => {

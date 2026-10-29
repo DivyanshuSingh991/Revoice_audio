@@ -119,9 +119,9 @@ export const ReviewModal: React.FC<ReviewModalProps> = ({
           <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 flex items-center gap-2.5 animate-fadeIn">
             <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
             <div>
-              <p className="font-bold text-emerald-900">Recording Submitted Successfully!</p>
+              <p className="font-bold text-emerald-900">Recording Submitted & Downloaded!</p>
               <p className="text-emerald-700 text-[11px] mt-0.5">
-                Saved in sandboxed local storage (16kHz PCM WAV). Level sequence will advance to next prompt.
+                Saved in local storage and audio file (.wav) downloaded automatically to your device.
               </p>
             </div>
           </div>
