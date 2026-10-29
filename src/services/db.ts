@@ -10,24 +10,17 @@ import {
   ReviewRecord,
 } from '../types';
 import { getDefaultSentences } from '../data/sampleSentences';
+import { supabaseDbService } from './supabaseDbService';
+import { isSupabaseConfigured } from './supabaseClient';
 
 const DB_NAME = 'ReVoiceAudioSpeechCorpusDB';
 const DB_VERSION = 3;
 
 /**
- * IndexedDB Relational Database Service (v3)
- * Provides robust object stores with indexes, transaction atomicity, and schema versioning.
- *
- * Dedicated Tables (Object Stores):
- * 1. 'sentences': Master catalog of speech corpus prompts (Key: 'id' / 'promptId')
- * 2. 'recordings': Audio recordings metadata linking each take to 'sentenceId' / 'promptId'
- * 3. 'users': Participant & Admin registration & identity table (Key: 'id', Indexed: 'participantId', 'email')
- * 4. 'consents': Informed consent records (Key: 'id', Indexed: 'userId')
- * 5. 'audio_files': Local binary linear PCM WAV storage (Key: 'path')
- * 6. 'participant_progress': Persistent prompt sequence & cohort progress (Key: 'userId')
- * 7. 'deletion_requests': Data deletion and withdrawal requests queue (Key: 'id', Indexed: 'userId', 'status')
- * 8. 'audit_logs': Administrative action audit trail (Key: 'id', Indexed: 'timestamp')
- * 9. 'reviews': Quality checklist & review decisions (Key: 'id', Indexed: 'recordingId')
+ * Hybrid Database Service:
+ * - When Supabase is configured: Writes and reads directly from Supabase PostgreSQL Cloud DB.
+ * - Always caches in browser IndexedDB (Local Cache & Offline Fallback).
+ * - Real audio binaries (WAV blobs) ALWAYS remain safely in local IndexedDB 'audio_files' store.
  */
 class DatabaseService {
   private dbPromise: Promise<IDBDatabase> | null = null;
@@ -70,7 +63,7 @@ class DatabaseService {
           consentStore.createIndex('userId', 'userId', { unique: false });
         }
 
-        // 3. Sentences Store (Master Prompt ID Table)
+        // 3. Sentences Store
         let sentenceStore: IDBObjectStore;
         if (!db.objectStoreNames.contains('sentences')) {
           sentenceStore = db.createObjectStore('sentences', { keyPath: 'id' });
@@ -123,17 +116,17 @@ class DatabaseService {
           recStore.createIndex('user_sentence', ['userId', 'sentenceId'], { unique: false });
         }
 
-        // 5. Audio Files Binary Blob Store
+        // 5. Audio Files Binary Blob Store (Local Browser Disk)
         if (!db.objectStoreNames.contains('audio_files')) {
           db.createObjectStore('audio_files', { keyPath: 'path' });
         }
 
-        // 6. Participant Progress Store (v3)
+        // 6. Participant Progress Store
         if (!db.objectStoreNames.contains('participant_progress')) {
           db.createObjectStore('participant_progress', { keyPath: 'userId' });
         }
 
-        // 7. Deletion Requests Store (v3)
+        // 7. Deletion Requests Store
         if (!db.objectStoreNames.contains('deletion_requests')) {
           const delStore = db.createObjectStore('deletion_requests', { keyPath: 'id' });
           delStore.createIndex('userId', 'userId', { unique: false });
@@ -141,13 +134,13 @@ class DatabaseService {
           delStore.createIndex('submissionDate', 'submissionDate', { unique: false });
         }
 
-        // 8. Audit Logs Store (v3)
+        // 8. Audit Logs Store
         if (!db.objectStoreNames.contains('audit_logs')) {
           const logStore = db.createObjectStore('audit_logs', { keyPath: 'id' });
           logStore.createIndex('timestamp', 'timestamp', { unique: false });
         }
 
-        // 9. Reviews Store (v3)
+        // 9. Reviews Store
         if (!db.objectStoreNames.contains('reviews')) {
           const revStore = db.createObjectStore('reviews', { keyPath: 'id' });
           revStore.createIndex('recordingId', 'recordingId', { unique: false });
@@ -170,6 +163,16 @@ class DatabaseService {
     return this.dbPromise;
   }
 
+  private async cacheLocalUser(user: User): Promise<void> {
+    try {
+      const db = await this.openDatabase();
+      const tx = db.transaction('users', 'readwrite');
+      tx.objectStore('users').put(user);
+    } catch {
+      // Ignore background cache failure
+    }
+  }
+
   private async seedDefaultSentences(db: IDBDatabase): Promise<void> {
     return new Promise((resolve, reject) => {
       const tx = db.transaction('sentences', 'readwrite');
@@ -180,7 +183,7 @@ class DatabaseService {
         const existing = (getAllReq.result || []) as Sentence[];
         const needsUpdate =
           existing.length !== 30 ||
-          existing.some((s) => !s.promptId || !s.instructionNotes || s.id.startsWith('l'));
+          existing.some((s) => !s.instructionNotes || s.id.startsWith('l'));
 
         if (needsUpdate) {
           store.clear();
@@ -196,10 +199,6 @@ class DatabaseService {
     });
   }
 
-  /**
-   * Seed default designated ReVoice staff admin account: Revoicegenai@gmail.com
-   * Uses PBKDF2-SHA256 hashed password for 'SJDAR@admin'.
-   */
   private async seedDefaultAdminAccount(db: IDBDatabase): Promise<void> {
     return new Promise((resolve, reject) => {
       const tx = db.transaction('users', 'readwrite');
@@ -209,8 +208,7 @@ class DatabaseService {
       getAllReq.onsuccess = () => {
         const users = (getAllReq.result || []) as User[];
         const targetEmail = 'revoicegenai@gmail.com';
-        
-        // Find existing admin or legacy admin account
+
         const existingAdmin = users.find(
           (u) =>
             u.email?.toLowerCase() === targetEmail ||
@@ -219,7 +217,7 @@ class DatabaseService {
         );
 
         const adminData: User = {
-          id: existingAdmin ? existingAdmin.id : 'admin-lead-uuid-0001',
+          id: existingAdmin ? existingAdmin.id : 'a0000000-0000-0000-0000-000000000001',
           participantId: existingAdmin?.participantId || 'STAFF_0001',
           name: existingAdmin?.name || 'ReVoice Administrator',
           email: targetEmail,
@@ -232,7 +230,6 @@ class DatabaseService {
           status: 'active',
         };
 
-        // If legacy admin with different id exists, clean up to avoid duplicates
         for (const u of users) {
           if (u.email?.toLowerCase() === 'admin@revoice.audio' && u.id !== adminData.id) {
             store.delete(u.id);
@@ -249,19 +246,34 @@ class DatabaseService {
 
   // --- Users Operations ---
   async addUser(user: User): Promise<void> {
+    if (isSupabaseConfigured) {
+      await supabaseDbService.addUser(user);
+    }
     const db = await this.openDatabase();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('users', 'readwrite');
       const store = tx.objectStore('users');
-      const req = store.add(user);
+      const req = store.put(user);
       req.onsuccess = () => resolve();
       req.onerror = () => reject(req.error);
     });
   }
 
   async getUserByEmail(email: string): Promise<User | null> {
-    const db = await this.openDatabase();
     const cleanEmail = email.trim().toLowerCase();
+    if (isSupabaseConfigured) {
+      try {
+        const user = await supabaseDbService.getUserByEmail(cleanEmail);
+        if (user) {
+          this.cacheLocalUser(user);
+          return user;
+        }
+      } catch (e) {
+        console.warn('Supabase getUserByEmail failed, falling back to local DB:', e);
+      }
+    }
+
+    const db = await this.openDatabase();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('users', 'readonly');
       const store = tx.objectStore('users');
@@ -271,7 +283,6 @@ class DatabaseService {
         if (req.result) {
           resolve(req.result);
         } else {
-          // Fallback scan across all users for case insensitivity or whitespace variance
           const allReq = store.getAll();
           allReq.onsuccess = () => {
             const list = (allReq.result || []) as User[];
@@ -288,10 +299,22 @@ class DatabaseService {
   }
 
   async getUserByMobileNumber(mobileNumber: string): Promise<User | null> {
-    const db = await this.openDatabase();
     const cleanDigits = mobileNumber.replace(/\D/g, '').slice(-10);
     if (!cleanDigits) return null;
 
+    if (isSupabaseConfigured) {
+      try {
+        const user = await supabaseDbService.getUserByMobileNumber(cleanDigits);
+        if (user) {
+          this.cacheLocalUser(user);
+          return user;
+        }
+      } catch (e) {
+        console.warn('Supabase getUserByMobileNumber failed, falling back to local DB:', e);
+      }
+    }
+
+    const db = await this.openDatabase();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('users', 'readonly');
       const store = tx.objectStore('users');
@@ -311,11 +334,24 @@ class DatabaseService {
   }
 
   async getUserByParticipantId(participantId: string): Promise<User | null> {
+    const cleanId = participantId.trim().toUpperCase();
+
+    if (isSupabaseConfigured) {
+      try {
+        const user = await supabaseDbService.getUserByParticipantId(cleanId);
+        if (user) {
+          this.cacheLocalUser(user);
+          return user;
+        }
+      } catch (e) {
+        console.warn('Supabase getUserByParticipantId failed, falling back to local DB:', e);
+      }
+    }
+
     const db = await this.openDatabase();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('users', 'readonly');
       const store = tx.objectStore('users');
-      const cleanId = participantId.trim().toUpperCase();
       const index = store.index('participantId');
       const req = index.get(cleanId);
       req.onsuccess = () => {
@@ -336,6 +372,18 @@ class DatabaseService {
   }
 
   async getUserById(id: string): Promise<User | null> {
+    if (isSupabaseConfigured) {
+      try {
+        const user = await supabaseDbService.getUserById(id);
+        if (user) {
+          this.cacheLocalUser(user);
+          return user;
+        }
+      } catch (e) {
+        console.warn('Supabase getUserById failed, falling back to local DB:', e);
+      }
+    }
+
     const db = await this.openDatabase();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('users', 'readonly');
@@ -347,6 +395,15 @@ class DatabaseService {
   }
 
   async getAllUsers(): Promise<User[]> {
+    if (isSupabaseConfigured) {
+      try {
+        const users = await supabaseDbService.getAllUsers();
+        if (users && users.length > 0) return users;
+      } catch (e) {
+        console.warn('Supabase getAllUsers failed, falling back to local DB:', e);
+      }
+    }
+
     const db = await this.openDatabase();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('users', 'readonly');
@@ -358,11 +415,26 @@ class DatabaseService {
   }
 
   async getAllParticipants(): Promise<User[]> {
+    if (isSupabaseConfigured) {
+      try {
+        const parts = await supabaseDbService.getAllParticipants();
+        if (parts && parts.length > 0) return parts;
+      } catch (e) {
+        console.warn('Supabase getAllParticipants failed, falling back to local DB:', e);
+      }
+    }
     const all = await this.getAllUsers();
     return all.filter((u) => u.role !== 'admin');
   }
 
   async updateUser(user: User): Promise<void> {
+    if (isSupabaseConfigured) {
+      try {
+        await supabaseDbService.updateUser(user);
+      } catch (e) {
+        console.error('Supabase updateUser error:', e);
+      }
+    }
     const db = await this.openDatabase();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('users', 'readwrite');
@@ -375,17 +447,33 @@ class DatabaseService {
 
   // --- Consents Operations ---
   async addConsent(consent: ConsentRecord): Promise<void> {
+    if (isSupabaseConfigured) {
+      try {
+        await supabaseDbService.addConsent(consent);
+      } catch (e) {
+        console.error('Supabase addConsent error:', e);
+      }
+    }
     const db = await this.openDatabase();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('consents', 'readwrite');
       const store = tx.objectStore('consents');
-      const req = store.add(consent);
+      const req = store.put(consent);
       req.onsuccess = () => resolve();
       req.onerror = () => reject(req.error);
     });
   }
 
   async getLatestConsentForUser(userId: string): Promise<ConsentRecord | null> {
+    if (isSupabaseConfigured) {
+      try {
+        const consent = await supabaseDbService.getLatestConsentForUser(userId);
+        if (consent) return consent;
+      } catch (e) {
+        console.warn('Supabase getLatestConsentForUser failed, falling back to local DB:', e);
+      }
+    }
+
     const db = await this.openDatabase();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('consents', 'readonly');
@@ -407,6 +495,15 @@ class DatabaseService {
 
   // --- Sentences Operations ---
   async getAllSentences(): Promise<Sentence[]> {
+    if (isSupabaseConfigured) {
+      try {
+        const sentences = await supabaseDbService.getAllSentences();
+        if (sentences && sentences.length > 0) return sentences;
+      } catch (e) {
+        console.warn('Supabase getAllSentences failed, falling back to local DB:', e);
+      }
+    }
+
     const db = await this.openDatabase();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('sentences', 'readonly');
@@ -433,6 +530,15 @@ class DatabaseService {
   }
 
   async getSentenceById(id: string): Promise<Sentence | null> {
+    if (isSupabaseConfigured) {
+      try {
+        const s = await supabaseDbService.getSentenceById(id);
+        if (s) return s;
+      } catch (e) {
+        console.warn('Supabase getSentenceById failed, falling back to local DB:', e);
+      }
+    }
+
     const db = await this.openDatabase();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('sentences', 'readonly');
@@ -444,6 +550,15 @@ class DatabaseService {
   }
 
   async getSentenceByPromptId(promptId: string): Promise<Sentence | null> {
+    if (isSupabaseConfigured) {
+      try {
+        const s = await supabaseDbService.getSentenceByPromptId(promptId);
+        if (s) return s;
+      } catch (e) {
+        console.warn('Supabase getSentenceByPromptId failed, falling back to local DB:', e);
+      }
+    }
+
     const db = await this.openDatabase();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('sentences', 'readonly');
@@ -473,6 +588,14 @@ class DatabaseService {
 
   // --- Recordings Metadata Operations ---
   async addRecording(recording: Recording): Promise<void> {
+    if (isSupabaseConfigured) {
+      try {
+        await supabaseDbService.addRecording(recording);
+      } catch (e) {
+        console.error('Supabase addRecording error:', e);
+      }
+    }
+
     const db = await this.openDatabase();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('recordings', 'readwrite');
@@ -488,6 +611,15 @@ class DatabaseService {
   }
 
   async getRecordingsForUser(userId: string): Promise<Recording[]> {
+    if (isSupabaseConfigured) {
+      try {
+        const recs = await supabaseDbService.getRecordingsForUser(userId);
+        if (recs) return recs;
+      } catch (e) {
+        console.warn('Supabase getRecordingsForUser failed, falling back to local DB:', e);
+      }
+    }
+
     const db = await this.openDatabase();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('recordings', 'readonly');
@@ -504,6 +636,15 @@ class DatabaseService {
   }
 
   async getAllRecordings(): Promise<Recording[]> {
+    if (isSupabaseConfigured) {
+      try {
+        const recs = await supabaseDbService.getAllRecordings();
+        if (recs) return recs;
+      } catch (e) {
+        console.warn('Supabase getAllRecordings failed, falling back to local DB:', e);
+      }
+    }
+
     const db = await this.openDatabase();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('recordings', 'readonly');
@@ -519,6 +660,15 @@ class DatabaseService {
   }
 
   async getRecordingById(id: string): Promise<Recording | null> {
+    if (isSupabaseConfigured) {
+      try {
+        const rec = await supabaseDbService.getRecordingById(id);
+        if (rec) return rec;
+      } catch (e) {
+        console.warn('Supabase getRecordingById failed, falling back to local DB:', e);
+      }
+    }
+
     const db = await this.openDatabase();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('recordings', 'readonly');
@@ -530,6 +680,15 @@ class DatabaseService {
   }
 
   async getRecordingsForSentence(userId: string, sentenceId: string): Promise<Recording[]> {
+    if (isSupabaseConfigured) {
+      try {
+        const recs = await supabaseDbService.getRecordingsForSentence(userId, sentenceId);
+        if (recs) return recs;
+      } catch (e) {
+        console.warn('Supabase getRecordingsForSentence failed, falling back to local DB:', e);
+      }
+    }
+
     const db = await this.openDatabase();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('recordings', 'readonly');
@@ -546,6 +705,14 @@ class DatabaseService {
   }
 
   async deleteRecording(id: string): Promise<void> {
+    if (isSupabaseConfigured) {
+      try {
+        await supabaseDbService.deleteRecording(id);
+      } catch (e) {
+        console.error('Supabase deleteRecording error:', e);
+      }
+    }
+
     const db = await this.openDatabase();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('recordings', 'readwrite');
@@ -556,7 +723,7 @@ class DatabaseService {
     });
   }
 
-  // --- Binary Audio Files (Simulated Private App Storage) ---
+  // --- Binary Audio Files (ALWAYS in Local Browser IndexedDB) ---
   async saveAudioFile(file: AudioStorageFile): Promise<void> {
     const db = await this.openDatabase();
     return new Promise((resolve, reject) => {
@@ -578,7 +745,6 @@ class DatabaseService {
         if (req.result) {
           resolve(req.result);
         } else {
-          // Fallback scan across all audio files to handle normalization or leading slashes
           const allReq = store.getAll();
           allReq.onsuccess = () => {
             const list = (allReq.result || []) as AudioStorageFile[];
@@ -624,8 +790,17 @@ class DatabaseService {
     });
   }
 
-  // --- Participant Progress Operations (v3) ---
+  // --- Participant Progress Operations ---
   async getParticipantProgress(userId: string): Promise<ParticipantProgress | null> {
+    if (isSupabaseConfigured) {
+      try {
+        const prog = await supabaseDbService.getParticipantProgress(userId);
+        if (prog) return prog;
+      } catch (e) {
+        console.warn('Supabase getParticipantProgress failed, falling back to local DB:', e);
+      }
+    }
+
     const db = await this.openDatabase();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('participant_progress', 'readonly');
@@ -637,6 +812,14 @@ class DatabaseService {
   }
 
   async saveParticipantProgress(progress: ParticipantProgress): Promise<void> {
+    if (isSupabaseConfigured) {
+      try {
+        await supabaseDbService.saveParticipantProgress(progress);
+      } catch (e) {
+        console.error('Supabase saveParticipantProgress error:', e);
+      }
+    }
+
     const db = await this.openDatabase();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('participant_progress', 'readwrite');
@@ -647,8 +830,17 @@ class DatabaseService {
     });
   }
 
-  // --- Deletion & Withdrawal Requests Operations (v3) ---
+  // --- Deletion & Withdrawal Requests Operations ---
   async getDeletionRequests(userId?: string): Promise<DeletionRequest[]> {
+    if (isSupabaseConfigured) {
+      try {
+        const reqs = await supabaseDbService.getDeletionRequests(userId);
+        if (reqs) return reqs;
+      } catch (e) {
+        console.warn('Supabase getDeletionRequests failed, falling back to local DB:', e);
+      }
+    }
+
     const db = await this.openDatabase();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('deletion_requests', 'readonly');
@@ -675,6 +867,15 @@ class DatabaseService {
   }
 
   async getDeletionRequestById(id: string): Promise<DeletionRequest | null> {
+    if (isSupabaseConfigured) {
+      try {
+        const req = await supabaseDbService.getDeletionRequestById(id);
+        if (req) return req;
+      } catch (e) {
+        console.warn('Supabase getDeletionRequestById failed, falling back to local DB:', e);
+      }
+    }
+
     const db = await this.openDatabase();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('deletion_requests', 'readonly');
@@ -686,6 +887,14 @@ class DatabaseService {
   }
 
   async addDeletionRequest(request: DeletionRequest): Promise<void> {
+    if (isSupabaseConfigured) {
+      try {
+        await supabaseDbService.addDeletionRequest(request);
+      } catch (e) {
+        console.error('Supabase addDeletionRequest error:', e);
+      }
+    }
+
     const db = await this.openDatabase();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('deletion_requests', 'readwrite');
@@ -700,8 +909,16 @@ class DatabaseService {
     return this.addDeletionRequest(request);
   }
 
-  // --- Audit Logs Operations (v3) ---
+  // --- Audit Logs Operations ---
   async addAuditLog(log: AuditLog): Promise<void> {
+    if (isSupabaseConfigured) {
+      try {
+        await supabaseDbService.addAuditLog(log);
+      } catch (e) {
+        console.error('Supabase addAuditLog error:', e);
+      }
+    }
+
     const db = await this.openDatabase();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('audit_logs', 'readwrite');
@@ -713,6 +930,15 @@ class DatabaseService {
   }
 
   async getAuditLogs(limit: number = 50): Promise<AuditLog[]> {
+    if (isSupabaseConfigured) {
+      try {
+        const logs = await supabaseDbService.getAuditLogs(limit);
+        if (logs && logs.length > 0) return logs;
+      } catch (e) {
+        console.warn('Supabase getAuditLogs failed, falling back to local DB:', e);
+      }
+    }
+
     const db = await this.openDatabase();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('audit_logs', 'readonly');
@@ -727,8 +953,16 @@ class DatabaseService {
     });
   }
 
-  // --- Reviews Operations (v3) ---
+  // --- Reviews Operations ---
   async addReviewRecord(review: ReviewRecord): Promise<void> {
+    if (isSupabaseConfigured) {
+      try {
+        await supabaseDbService.addReviewRecord(review);
+      } catch (e) {
+        console.error('Supabase addReviewRecord error:', e);
+      }
+    }
+
     const db = await this.openDatabase();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('reviews', 'readwrite');
@@ -740,6 +974,15 @@ class DatabaseService {
   }
 
   async getReviewsForRecording(recordingId: string): Promise<ReviewRecord[]> {
+    if (isSupabaseConfigured) {
+      try {
+        const revs = await supabaseDbService.getReviewsForRecording(recordingId);
+        if (revs && revs.length > 0) return revs;
+      } catch (e) {
+        console.warn('Supabase getReviewsForRecording failed, falling back to local DB:', e);
+      }
+    }
+
     const db = await this.openDatabase();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('reviews', 'readonly');
