@@ -1,6 +1,6 @@
 # ReVoice Audio — Clinical Speech Corpus Web Platform
 
-**ReVoice Audio** is a research-grade web application engineered for collecting sentence-level acoustic speech corpora from participants. It features Indian 10-digit mobile number + OTP authentication, informed consent verification, a 3-level speech corpus, real-time waveform recording, local 16-bit Linear PCM WAV encoding, decoupled local system disk storage with database path pointers, administrator clinical review queues, deletion governance, and standardized research dataset export.
+**ReVoice Audio** is a research-grade web application engineered for collecting sentence-level acoustic speech corpora from participants. It features Indian 10-digit mobile number + OTP authentication, informed consent verification, a 3-level speech corpus, real-time waveform recording, local 16-bit Linear PCM WAV encoding, decoupled local system disk storage with database path pointers, administrator clinical review queues, deletion governance, and standardized research dataset export..
 
 ---
 
